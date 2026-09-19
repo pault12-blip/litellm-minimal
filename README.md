@@ -12,7 +12,7 @@ Minimal OpenAI-compatible gateway on top of `litellm.Router`. No fork, no proxy 
 
     mkdir -p ~/src && cd ~/src
     git clone https://github.com/BerriAI/litellm.git litellm
-    git clone https://github.com/<your-org>/litellm-minimal.git
+    git clone https://github.com/pault12-blip/litellm-minimal.git
     cd litellm-minimal
 
     python3 -m venv .venv && source .venv/bin/activate
@@ -38,7 +38,8 @@ Do not `pip install litellm` or `pip install -e .`.
 
     #!/bin/sh
 
-    export PYTHONPATH=/u2/LLL/litellm:$PYTHONPATH
+    export PYTHONPATH=../litellm:$PYTHONPATH
+
     #export LITELLM_DEBUG=true
 
     /usr/bin/python3 app.py

@@ -54,5 +54,7 @@ Binds `0.0.0.0:${PORT:-4000}`.
 
 ## License
 
-See `LICENSE`. litellm remains under its own license.
+LICENSE IS MIT.
+
+litellm remains under its own license.
 

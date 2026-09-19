@@ -1,0 +1,10 @@
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: sk-proj-your-key-here-or-in-env
+router_settings:
+  num_retries: 2
+  allowed_fails: 3
+  cooldown_time: 30
+  routing_strategy: simple-shuffle

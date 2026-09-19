@@ -52,6 +52,29 @@ Binds `0.0.0.0:${PORT:-4000}`.
       -H "Content-Type: application/json" \
       -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}'
 
+## Example
+
+litellm-minimal$ ./start.sh
+stopping: /usr/bin/python3 /litellm-minimal/app.py (pid 984944)
+starting: /usr/bin/python3 /litellm-minimal/app.py (debug=false)
+pid 985976
+
+litellm-minimal$ ./start.sh status
+running: /usr/bin/python3 /litellm-minimal/app.py (pid 985976)
+health: "I'm alive!"
+
+litellm-minimal$ ./t.sh
+
+{"id":"chatcmpl-EPwSoHSgpf7WXwkkLUFz8RLQOpEbs","created":1789851642,"model":"gpt-4o-mini-2024-07-18","object":"chat.completion","system_fingerprint":"fp_f70887b4d3","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant","tool_calls":null,"function_call":null,"provider_specific_fields":{"refusal":null},"annotations":[]},"provider_specific_fields":{}}],"usage":{"completion_tokens":9,"prompt_tokens":13,"total_tokens":22,"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0},"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0}},"moderation":null,"service_tier":"default"}
+
+litellm-minimal$ ./stats.sh
+
+*** stats
+{"gpt-4o-mini":{"total_calls":1,"success_calls":1,"fail_calls":0,"input_tpm":13,"output_tpm":16384}}
+*** modconf
+[{"model_name":"gpt-4o-mini","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"***","itpm":1000000,"otpm":1000000}}]
+
+
 ## License
 
 LICENSE IS MIT.

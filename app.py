@@ -10,7 +10,9 @@ edited, never deleted. The frozen contract this file builds against is:
 Routes are OpenAI wire-format and that contract must not change.
 """
 
+import json
 import os
+import time
 
 import litellm
 
@@ -24,6 +26,7 @@ from fastapi.responses import JSONResponse
 from config import load_config
 
 CONFIG_PATH = os.environ.get("LITELLM_GATEWAY_CONFIG", "config.yaml")
+FAILURES_LOG_PATH = os.environ.get("LITELLM_GATEWAY_FAILURES_LOG", "failures.jsonl")
 
 cfg = load_config(CONFIG_PATH)
 router = litellm.Router(model_list=cfg["model_list"], **cfg["router_kwargs"])
@@ -31,14 +34,74 @@ router = litellm.Router(model_list=cfg["model_list"], **cfg["router_kwargs"])
 app = FastAPI(title="litellm-gateway-minimal")
 
 
+def _record_failure(model_name: str, deployment_model: str | None, error: Exception) -> None:
+    entry = {
+        "ts": time.time(),
+        "model_name": model_name,
+        "deployment_model": deployment_model,
+        "error_type": type(error).__name__,
+        "status_code": getattr(error, "status_code", None),
+        "message": str(error),
+    }
+    with open(FAILURES_LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+async def _try_direct_fallbacks(body: dict, model_name: str, already_failed_models: set[str]):
+    """Router gave up (e.g. a 402, which litellm treats as non-retryable
+    regardless of sibling deployments) even though other deployments exist
+    in this model_name group. Walk the remaining deployments directly via
+    litellm.acompletion, bypassing Router's internal retry/cooldown gate,
+    which owns exactly this decision and is the one thing we don't touch.
+    """
+    deployments = [
+        m for m in cfg["model_list"]
+        if m["model_name"] == model_name
+        and m["litellm_params"]["model"] not in already_failed_models
+    ]
+    last_error: Exception | None = None
+    for deployment in deployments:
+        params = dict(deployment["litellm_params"])
+        deployment_model = params.pop("model")
+        params.pop("itpm", None)
+        params.pop("otpm", None)
+        params.pop("tpm", None)
+        params.pop("rpm", None)
+        try:
+            call_kwargs = {**body, **params, "model": deployment_model}
+            return await litellm.acompletion(**call_kwargs)
+        except Exception as e:
+            _record_failure(model_name, deployment_model, e)
+            last_error = e
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"no fallback deployments left for model_name={model_name!r}")
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
+    model_name = body.get("model")
     try:
         response = await router.acompletion(**body)
-    except litellm.exceptions.APIError as e:
-        return JSONResponse(status_code=getattr(e, "status_code", 500), content={"error": str(e)})
+    except Exception as e:
+        failed_model = getattr(e, "model", None)
+        _record_failure(model_name, failed_model, e)
+        already_failed = {failed_model} if failed_model else set()
+        try:
+            response = await _try_direct_fallbacks(body, model_name, already_failed)
+        except Exception as e2:
+            return JSONResponse(status_code=getattr(e2, "status_code", 500), content={"error": str(e2)})
     return response.model_dump() if hasattr(response, "model_dump") else response
+
+
+@app.get("/failures")
+async def failures(limit: int = 50):
+    if not os.path.exists(FAILURES_LOG_PATH):
+        return []
+    with open(FAILURES_LOG_PATH) as f:
+        lines = f.readlines()
+    return [json.loads(line) for line in lines[-limit:]]
 
 
 @app.get("/v1/models")

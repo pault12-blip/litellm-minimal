@@ -19,6 +19,12 @@ import litellm
 if os.getenv("LITELLM_DEBUG", "false").lower() == "true":
     litellm._turn_on_debug()
 
+try:
+    from custom_callbacks import custom_handler_instance
+    litellm.callbacks = [custom_handler_instance]
+except ModuleNotFoundError:
+    pass
+
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse

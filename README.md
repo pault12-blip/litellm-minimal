@@ -74,6 +74,19 @@ Binds `0.0.0.0:${PORT:-4000}`.
     *** modconf
     [{"model_name":"gpt-4o-mini","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"***","itpm":1000000,"otpm":1000000}}]
 
+    cat litellm-minimal/failures.json
+
+    {"ts": 1789914647.194932, "model_name": "mini", "deployment_model": "", "error_type": "RateLimitError", "status_code": 429, "message": "litellm.RateLimitError: Model rate limit exceeded. OTPM limit=1000000, current usage=1024000. Received Model Group=mini\nAvailable Model Group Fallbacks=None"}
+    {"ts": 1789914648.7923481, "model_name": "mini", "deployment_model": "", "error_type": "RateLimitError", "status_code": 429, "message": "litellm.RateLimitError: Model rate limit exceeded. OTPM limit=1000000, current usage=1024000. Received Model Group=mini\nAvailable Model Group Fallbacks=None"}
+    {"ts": 1789935834.2116854, "model_name": "mini", "deployment_model": "openai/gpt-5.4-mini", "error_type": "InternalServerError", "status_code": 500, "message": "litellm.InternalServerError: InternalServerError: OpenAIException - Missing credentials. Please pass an `api_key`, `workload_identity`, `admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.. Received Model Group=mini\nAvailable Model Group Fallbacks=None LiteLLM Retried: 2 times, LiteLLM Max Retries: 2"}
+
+
+    cat costs.tab
+
+    provider model requests estimated_cost_usd updated_at
+    groq qwen/qwen3.8-27b 1 0.000057 2026-09-20 21:05:30
+    openai gpt-3.5-turbo 1 0.000020 2026-09-20 21:05:30
+
 
 ## License
 

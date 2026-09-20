@@ -1,48 +1,23 @@
-"""
-Tolerant config.yaml loader for the minimal gateway.
-
-Contract: this loader MUST accept the full standard litellm proxy
-config.yaml schema without failing on keys the minimal gateway does not use.
-The config file is the user's contract -- we never delete or mutate keys in
-it, we only read the subset that maps onto litellm.Router's own public
-constructor signature.
-
-Consumed:
-  - model_list            -> passed straight to Router(model_list=...)
-  - router_settings       -> filtered to exactly the keyword arguments
-                              litellm.Router.__init__ accepts *in the
-                              installed litellm version*; introspected at
-                              import time via inspect.signature rather than
-                              hardcoded, so a future litellm bump that adds
-                              or removes a Router kwarg is picked up
-                              automatically instead of silently drifting.
-                              Unknown router_settings keys are reported, not
-                              silently dropped.
-
-Ignored-with-warning (proxy/server/DB-only; out of scope for this gateway --
-no keys, no DB, no auth, no multi-replica state):
-  - master_key, general_settings, litellm_settings.callbacks,
-    litellm_settings.success_callback / failure_callback,
-    any S3 / GCS / Azure / Redis cloud-logging or cache config,
-    SSO / SAML config, guardrails, budgets, teams.
-
-If the config uses a feature this gateway genuinely cannot serve, this
-loader lists exactly which top-level keys were ignored -- it never
-pretends to have implemented them.
-"""
+# keys.tab (alongside config.yaml, path overridable via LITELLM_GATEWAY_KEYS_FILE)
+# holds "provider api_key" lines (space-separated) and fills in
+# litellm_params.api_key for any model that leaves it unset or set to a
+# CHANGE_ME_* placeholder.
 
 from __future__ import annotations
 
 import inspect
+import os
 import sys
 from typing import Any
 
 import litellm
 import yaml
 
+_DEFAULT_KEYS_FILE = "keys.tab"
+
 _KNOWN_UNSUPPORTED_TOP_LEVEL_KEYS = {
-    "general_settings",  # auth, budgets, teams, keys, DB connection
-    "litellm_settings",  # only a tiny subset is safe to read; see below
+    "general_settings",
+    "litellm_settings",
 }
 
 _SUPPORTED_LITELLM_SETTINGS_KEYS = {
@@ -58,6 +33,61 @@ def _router_accepted_kwargs() -> set[str]:
     return {name for name in sig.parameters if name != "self"}
 
 
+def _load_provider_keys(path: str) -> dict[str, str]:
+    if not os.path.exists(path):
+        return {}
+
+    keys: dict[str, str] = {}
+    with open(path) as f:
+        for lineno, line in enumerate(f, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            fields = stripped.split(" ")
+            if len(fields) != 2 or not fields[0] or not fields[1]:
+                print(
+                    f"error: {path}:{lineno}: malformed line, expected "
+                    f"'provider api_key': {line!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            provider, api_key = fields
+            keys[provider] = api_key
+    return keys
+
+
+def _needs_key_from_table(litellm_params: dict[str, Any]) -> bool:
+    api_key = litellm_params.get("api_key")
+    if not api_key:
+        return True
+    return isinstance(api_key, str) and api_key.startswith("CHANGE_ME_")
+
+
+def _resolve_provider_keys(model_list: list[dict[str, Any]], provider_keys: dict[str, str]) -> None:
+    for entry in model_list:
+        litellm_params = entry.get("litellm_params") or {}
+        if not _needs_key_from_table(litellm_params):
+            continue
+
+        model_string = litellm_params.get("model", "")
+        prefix = model_string.split("/", 1)[0] if "/" in model_string else None
+
+        if prefix is None or prefix not in provider_keys:
+            model_name = entry.get("model_name", "<unnamed>")
+            missing = repr(prefix) if prefix else "<no prefix in model string>"
+            print(
+                f"error: model '{model_name}' (model={model_string!r}) has no "
+                f"api_key and no matching entry for provider "
+                f"{missing} in keys.tab -- refusing to start with a "
+                f"null/placeholder key.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        litellm_params["api_key"] = provider_keys[prefix]
+        entry["litellm_params"] = litellm_params
+
+
 def load_config(path: str) -> dict[str, Any]:
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
@@ -65,6 +95,10 @@ def load_config(path: str) -> dict[str, Any]:
     if "model_list" not in raw:
         print(f"error: {path} has no top-level 'model_list' key", file=sys.stderr)
         sys.exit(1)
+
+    keys_file = os.environ.get("LITELLM_GATEWAY_KEYS_FILE", _DEFAULT_KEYS_FILE)
+    provider_keys = _load_provider_keys(keys_file)
+    _resolve_provider_keys(raw["model_list"], provider_keys)
 
     accepted = _router_accepted_kwargs()
 
@@ -77,10 +111,6 @@ def load_config(path: str) -> dict[str, Any]:
         setattr(litellm, key, litellm_settings[key])
 
     ignored_top_level = set(raw) & _KNOWN_UNSUPPORTED_TOP_LEVEL_KEYS
-
-    # litellm_settings is partially supported, so report only if it had
-    # keys we don't forward, not just because the block exists.
-
     if "litellm_settings" in ignored_top_level:
         remaining = set(litellm_settings) - _SUPPORTED_LITELLM_SETTINGS_KEYS
         if not remaining:
@@ -106,4 +136,3 @@ def load_config(path: str) -> dict[str, Any]:
         "router_kwargs": router_kwargs,
         "ignored_keys": sorted(ignored_top_level),
     }
-

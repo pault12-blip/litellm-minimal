@@ -240,6 +240,8 @@ router_settings:
   allowed_fails: 3
   cooldown_time: 30
   routing_strategy: simple-shuffle
+  fallbacks:
+    - "*": ["nano"]
   # routing_strategy: least-busy
   # routing_strategy: usage-based-routing
   # routing_strategy: usage-based-routing-v2

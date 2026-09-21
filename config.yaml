@@ -235,6 +235,19 @@ model_list:
       input_cost_per_token: 0.0000005
       output_cost_per_token: 0.0000015
 
+  - model_name: route-llm  
+    litellm_params:  
+      <<: *limits
+      model: openai/route-llm  
+      api_base: https://routellm.abacus.ai/v1
+
+  - model_name: ngrok
+    litellm_params:
+      <<: *limits
+      model: openai/ngrok/auto
+      api_base: https://gateway.ngrok.ai
+
+
 router_settings:
   num_retries: 2
   allowed_fails: 3

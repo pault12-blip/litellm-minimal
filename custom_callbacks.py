@@ -1,32 +1,21 @@
 """
-Cost ledger + scheduled FOCUS export for the minimal gateway -- no database.
+Ledger-only cost tracker for the minimal gateway -- no database.
 
 Wired in by app.py via litellm.callbacks = [custom_handler_instance]
 (litellm's stable public callback list), not litellm_settings.callbacks
 (that string-based dotted-import mechanism belongs to litellm/proxy/'s
 config loader, which this gateway does not have).
 
-On every call, appends one line to costs_ledger.tsv (see focus.py):
-"timestamp provider model spend". A background thread periodically calls
-focus.export_focus_csv(), which reads that ledger plus checkpoints.tsv
-(manually-appended real billing figures) and writes a FOCUS 1.2 CSV, with
-BilledCost corrected against the last checkpoint interval and EffectiveCost
-left as the raw, uncorrected estimate. See focus.py for the reconciliation
-math.
+This is intentionally the ONLY thing the gateway process does: append one
+line per call to FOCUS/costs_ledger.tsv (see focus.py). Reconciliation
+against real provider balances and the FOCUS CSV export both happen in
+focus.py, run as a separate, periodic, standalone script -- never inside
+this process.
 """
-
-import os
-import threading
-import time
 
 from litellm.integrations.custom_logger import CustomLogger
 
-from focus import append_ledger, export_focus_csv
-
-LEDGER_FILE = os.environ.get("COSTS_LEDGER_FILE", "FOCUS/costs_ledger.tsv")
-CHECKPOINTS_FILE = os.environ.get("FOCUS_CHECKPOINT_FILE", "FOCUS/checkpoints.tsv")
-FOCUS_EXPORT_FILE = os.environ.get("FOCUS_EXPORT_FILE", "FOCUS/focus_export.csv")
-FOCUS_EXPORT_SECONDS = int(os.environ.get("FOCUS_EXPORT_SECONDS", str(7 * 24 * 60 * 60)))  # weekly
+from focus import append_ledger
 
 
 def _key_for(kwargs) -> tuple[str, str]:
@@ -36,27 +25,20 @@ def _key_for(kwargs) -> tuple[str, str]:
     return provider, model
 
 
+def _n_tokens(kwargs) -> int:
+    slo = kwargs.get("standard_logging_object") or {}
+    return int(slo.get("total_tokens") or 0)
+
+
 def _record(kwargs, response_cost: float):
     provider, model = _key_for(kwargs)
     spend = response_cost or 0.0
-    append_ledger(LEDGER_FILE, provider, model, spend)
-    print(f"[COST TRACKING] {provider}|{model} spend={spend:.6f}")
-
-
-def _export_loop():
-    while True:
-        time.sleep(FOCUS_EXPORT_SECONDS)
-        try:
-            n = export_focus_csv(LEDGER_FILE, CHECKPOINTS_FILE, FOCUS_EXPORT_FILE)
-            print(f"[FOCUS EXPORT] wrote {n} rows to {FOCUS_EXPORT_FILE}")
-        except Exception as e:
-            print(f"[FOCUS EXPORT] failed: {e}")
+    n_tokens = _n_tokens(kwargs)
+    append_ledger(provider, model, spend, n_tokens)
+    print(f"[COST TRACKING] {provider}|{model} spend={spend:.6f} tokens={n_tokens}")
 
 
 class RunningCostTracker(CustomLogger):
-    def __init__(self):
-        threading.Thread(target=_export_loop, daemon=True).start()
-
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _record(kwargs, kwargs.get("response_cost"))
 

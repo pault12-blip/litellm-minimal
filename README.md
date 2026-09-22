@@ -5,7 +5,7 @@
 
 ## Costs
 
- FOCUS 1.2 export + checkpoint reconciliation are impelemented.
+ FOCUS 1.2 export + checkpoint reconciliation are implemented.
  Implemented via text files, no DB dependencies
     
 

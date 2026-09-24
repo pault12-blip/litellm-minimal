@@ -115,10 +115,18 @@ async def _capture_silent(body,model_name,primary_response,silent_model_name):
     except Exception as e:
         capture_pair(model_name,primary_response,silent_model_name,None,str(e))
 
+def report_hook(hook, tx, model):
+    print(f"[HOOK] {tx} {hook} {time.strftime('%Y-%m-%d %H:%M:%S')} model={model}", flush=True)
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
     model_name = body.get("model")
+    tx = f"{model_name}|{time.time_ns()}"
+    report_hook("start", tx, model_name)
+
+    hook_id = f"{model_name}:{time.time_ns()}"
+ 
 
     try:
         response = await router.acompletion(**body)
@@ -135,6 +143,7 @@ async def chat_completions(request: Request):
     if silent_model_name is not None:
         _spawn_background(_capture_silent(body,model_name,response,silent_model_name))
 
+    report_hook("end", tx, model_name)
     return response.model_dump() if hasattr(response, "model_dump") else response
 
 

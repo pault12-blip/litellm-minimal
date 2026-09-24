@@ -14,9 +14,23 @@ import asyncio
 import json
 import os
 import time
-import uuid
 
 import litellm
+
+import signal
+
+def _sig(signum, frame):
+    import os
+    print(
+        f"*** SIGNAL {signum}: "
+        f"pid={os.getpid()} "
+        f"ppid={os.getppid()}",
+        flush=True,
+    )
+
+signal.signal(signal.SIGHUP, _sig)
+signal.signal(signal.SIGTERM, _sig)
+signal.signal(signal.SIGINT, _sig)
 
 if os.getenv("LITELLM_DEBUG", "false").lower() == "true":
     litellm._turn_on_debug()
@@ -32,6 +46,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from config import load_config
+from drift import capture_pair
 
 CONFIG_PATH = os.environ.get("LITELLM_GATEWAY_CONFIG", "config.yaml")
 FAILURES_LOG_PATH = os.environ.get("LITELLM_GATEWAY_FAILURES_LOG", "failures.jsonl")
@@ -40,6 +55,13 @@ cfg = load_config(CONFIG_PATH)
 router = litellm.Router(model_list=cfg["model_list"], **cfg["router_kwargs"])
 
 app = FastAPI(title="litellm-gateway-minimal")
+
+_background_tasks=set()
+
+def _spawn_background(coro):
+    task=asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def _record_failure(model_name: str, deployment_model: str | None, error: Exception) -> None:
@@ -85,36 +107,18 @@ async def _try_direct_fallbacks(body: dict, model_name: str, already_failed_mode
         raise last_error
     raise RuntimeError(f"no fallback deployments left for model_name={model_name!r}")
 
-
-async def _fire_silent_mirror(body: dict, primary_model_name: str, silent_model_name: str, correlation_id: str) -> None:
-    """Fire-and-forget: same messages, routed to the silent deployment
-    through the same router.acompletion() surface used everywhere else in
-    this project. Never litellm.Router's own silent_model dispatch --
-    config.py has already stripped that key before Router ever saw it.
-    Errors here are captured by custom_callbacks.py's failure hook, same
-    as the primary call, not swallowed.
-    """
-    silent_body = {**body, "model": silent_model_name, "metadata": {**body.get("metadata", {})}}
-    silent_body["metadata"]["drift_correlation_id"] = correlation_id
-    silent_body["metadata"]["drift_role"] = "silent"
+async def _capture_silent(body,model_name,primary_response,silent_model_name):
+    silent_body={**body,"model":silent_model_name}
     try:
-        await router.acompletion(**silent_body)
-    except Exception:
-        pass  # already recorded by the failure callback; nothing more to do here
-
+        silent_response=await router.acompletion(**silent_body)
+        capture_pair(model_name,primary_response,silent_model_name,silent_response)
+    except Exception as e:
+        capture_pair(model_name,primary_response,silent_model_name,None,str(e))
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
     model_name = body.get("model")
-
-    silent_model_name = cfg["silent_pairs"].get(model_name)
-    if silent_model_name is not None:
-        correlation_id = str(uuid.uuid4())
-        body.setdefault("metadata", {})
-        body["metadata"]["drift_correlation_id"] = correlation_id
-        body["metadata"]["drift_role"] = "primary"
-        asyncio.create_task(_fire_silent_mirror(body, model_name, silent_model_name, correlation_id))
 
     try:
         response = await router.acompletion(**body)
@@ -126,6 +130,11 @@ async def chat_completions(request: Request):
             response = await _try_direct_fallbacks(body, model_name, already_failed)
         except Exception as e2:
             return JSONResponse(status_code=getattr(e2, "status_code", 500), content={"error": str(e2)})
+
+    silent_model_name = cfg["silent_pairs"].get(model_name)
+    if silent_model_name is not None:
+        _spawn_background(_capture_silent(body,model_name,response,silent_model_name))
+
     return response.model_dump() if hasattr(response, "model_dump") else response
 
 

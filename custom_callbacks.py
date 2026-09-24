@@ -22,7 +22,6 @@ same two hooks:
 from litellm.integrations.custom_logger import CustomLogger
 
 from focus import append_ledger
-from drift import record_half
 
 
 def _key_for(kwargs) -> tuple[str, str]:
@@ -45,35 +44,15 @@ def _record_cost(kwargs, response_cost: float):
     print(f"[COST TRACKING] {provider}|{model} spend={spend:.6f} tokens={n_tokens}")
 
 
-def _record_drift(kwargs, response_obj, error):
-    metadata = kwargs.get("litellm_params", {}).get("metadata") or {}
-    correlation_id = metadata.get("drift_correlation_id")
-    if correlation_id is None:
-        return
-    provider, model = _key_for(kwargs)
-    record_half(
-        correlation_id=correlation_id,
-        role=metadata.get("drift_role", "unknown"),
-        model_name=model,
-        provider=provider,
-        prompt=kwargs.get("messages"),
-        response_obj=response_obj,
-        error=error,
-    )
-
-
 class RunningCostTracker(CustomLogger):
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _record_cost(kwargs, kwargs.get("response_cost"))
-        _record_drift(kwargs, response_obj, error=None)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         _record_cost(kwargs, kwargs.get("response_cost"))
-        _record_drift(kwargs, response_obj, error=None)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         _record_cost(kwargs, 0.0)
-        _record_drift(kwargs, response_obj, error=kwargs.get("exception"))
 
 
 custom_handler_instance = RunningCostTracker()

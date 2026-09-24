@@ -88,6 +88,26 @@ def _resolve_provider_keys(model_list: list[dict[str, Any]], provider_keys: dict
         entry["litellm_params"] = litellm_params
 
 
+def _extract_silent_pairs(model_list: list[dict[str, Any]]) -> dict[str, str]:
+    """Reads litellm_params.silent_model off each deployment, then REMOVES
+    it before the config ever reaches litellm.Router. Router's own
+    silent_model dispatch is confirmed broken on /v1/responses and
+    Anthropic /v1/messages (silent_model leaks into the underlying provider
+    SDK call -- "unexpected keyword argument 'silent_model'") and is
+    undocumented/untyped even where it happens to work (chat completions
+    only). We never invoke that code path at all: this gateway reads the
+    pairing itself and drives both calls through the same
+    router.acompletion() surface it already depends on everywhere else.
+    """
+    pairs: dict[str, str] = {}
+    for entry in model_list:
+        litellm_params = entry.get("litellm_params") or {}
+        silent_model = litellm_params.pop("silent_model", None)
+        if silent_model is not None:
+            pairs[entry["model_name"]] = silent_model
+    return pairs
+
+
 def load_config(path: str) -> dict[str, Any]:
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
@@ -99,6 +119,7 @@ def load_config(path: str) -> dict[str, Any]:
     keys_file = os.environ.get("LITELLM_GATEWAY_KEYS_FILE", _DEFAULT_KEYS_FILE)
     provider_keys = _load_provider_keys(keys_file)
     _resolve_provider_keys(raw["model_list"], provider_keys)
+    silent_pairs = _extract_silent_pairs(raw["model_list"])
 
     accepted = _router_accepted_kwargs()
 
@@ -135,4 +156,5 @@ def load_config(path: str) -> dict[str, Any]:
         "model_list": raw["model_list"],
         "router_kwargs": router_kwargs,
         "ignored_keys": sorted(ignored_top_level),
+        "silent_pairs": silent_pairs,
     }

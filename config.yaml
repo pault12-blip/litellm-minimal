@@ -246,6 +246,7 @@ model_list:
       <<: *limits
       model: openai/ngrok/auto
       api_base: https://gateway.ngrok.ai
+      silent_model: mini
 
 
 router_settings:

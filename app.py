@@ -10,9 +10,11 @@ edited, never deleted. The frozen contract this file builds against is:
 Routes are OpenAI wire-format and that contract must not change.
 """
 
+import asyncio
 import json
 import os
 import time
+import uuid
 
 import litellm
 
@@ -84,10 +86,36 @@ async def _try_direct_fallbacks(body: dict, model_name: str, already_failed_mode
     raise RuntimeError(f"no fallback deployments left for model_name={model_name!r}")
 
 
+async def _fire_silent_mirror(body: dict, primary_model_name: str, silent_model_name: str, correlation_id: str) -> None:
+    """Fire-and-forget: same messages, routed to the silent deployment
+    through the same router.acompletion() surface used everywhere else in
+    this project. Never litellm.Router's own silent_model dispatch --
+    config.py has already stripped that key before Router ever saw it.
+    Errors here are captured by custom_callbacks.py's failure hook, same
+    as the primary call, not swallowed.
+    """
+    silent_body = {**body, "model": silent_model_name, "metadata": {**body.get("metadata", {})}}
+    silent_body["metadata"]["drift_correlation_id"] = correlation_id
+    silent_body["metadata"]["drift_role"] = "silent"
+    try:
+        await router.acompletion(**silent_body)
+    except Exception:
+        pass  # already recorded by the failure callback; nothing more to do here
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
     model_name = body.get("model")
+
+    silent_model_name = cfg["silent_pairs"].get(model_name)
+    if silent_model_name is not None:
+        correlation_id = str(uuid.uuid4())
+        body.setdefault("metadata", {})
+        body["metadata"]["drift_correlation_id"] = correlation_id
+        body["metadata"]["drift_role"] = "primary"
+        asyncio.create_task(_fire_silent_mirror(body, model_name, silent_model_name, correlation_id))
+
     try:
         response = await router.acompletion(**body)
     except Exception as e:
@@ -172,4 +200,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
